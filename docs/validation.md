@@ -36,3 +36,18 @@ chars. Published numbers for this model (~31%) use richer scaffolds + 128k ctx.
 2. Duplicate `<|im_end|>` per turn → token-stream corruption (caught by transcript inspection)
 3. `submit` inside a bash fence ended episodes early (caught by transcript inspection)
 4. Django test-ID format broke the verifier → false negatives (caught by poscontrol on django)
+
+
+## Prompt versioning
+
+The system prompt is part of the recipe; changes are only adopted with a graded eval.
+
+| prompt | change | pass@1 (first 100 Verified) | empty patches |
+|---|---|---|---|
+| bash-minimal-v1 | baseline | **24/100** | 24 |
+| bash-minimal-v2 (rejected) | added "graded only on final repo state; explanations score zero; verify before submit" | 17/100 | 42 |
+
+v2 failed: instead of inducing edits, the framing induced early bail-outs (2-3-turn
+empty episodes) and "analysis complete" loops where the model documented the fix,
+never applied it, and repeated `exit 0`. Full v2 wording preserved in this file's
+git history rationale; report: docs/results/…trajokit-100-v2.json.
