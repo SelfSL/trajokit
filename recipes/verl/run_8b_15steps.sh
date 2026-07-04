@@ -16,6 +16,7 @@ CUDA_VISIBLE_DEVICES=2 .venv/bin/python -m verl.trainer.main_ppo \
   actor_rollout_ref.actor.policy_loss.loss_mode=gspo \
   data.train_files=swebench_verl.parquet \
   data.val_files=swebench_verl.parquet \
+  data.dataloader_num_workers=0 \
   data.train_batch_size=8 \
   data.max_prompt_length=4096 \
   data.max_response_length=16384 \
@@ -37,7 +38,9 @@ CUDA_VISIBLE_DEVICES=2 .venv/bin/python -m verl.trainer.main_ppo \
   trainer.total_training_steps=15 \
   trainer.total_epochs=2 \
   trainer.save_freq=5 \
+  trainer.test_freq=5 \
   trainer.val_before_train=False \
-  trainer.n_gpus_per_node=1 trainer.nnodes=1 \
+  trainer.n_gpus_per_node=1 \
+  trainer.nnodes=1 \
   trainer.logger='["console"]' \
   trainer.project_name=trajokit trainer.experiment_name=gspo-8b-train-15step
