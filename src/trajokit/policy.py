@@ -48,8 +48,10 @@ class PolicyClient:
         return {
             "text": choice["text"],
             "token_ids": token_ids,
+            "logprobs": lp.get("token_logprobs"),
             "finish_reason": choice.get("finish_reason"),
         }
 
     async def aclose(self) -> None:
         await self._client.aclose()
+

@@ -12,10 +12,12 @@ class FakeTok:
 class FakeServerManager:
     def __init__(self):
         self.calls = []
+        self.gs = 7
 
     async def generate(self, request_id, prompt_ids, sampling_params):
         self.calls.append((request_id, list(prompt_ids), dict(sampling_params)))
-        return SimpleNamespace(token_ids=[104, 105], stop_reason="completed")  # "hi"
+        return SimpleNamespace(token_ids=[104, 105], stop_reason="completed",  # "hi"
+                               extra_fields={"min_global_steps": self.gs, "max_global_steps": self.gs})
 
 
 async def test_shim_round_trip_and_params():
@@ -23,7 +25,7 @@ async def test_shim_round_trip_and_params():
     shim = VerlPolicyShim(mgr, FakeTok(), request_id="r1",
                           base_sampling_params={"temperature": 0.7, "top_p": 0.9})
     out = await shim.complete([1, 2, 3], max_tokens=17, stop=["</s>"])
-    assert out == {"text": "hi", "token_ids": [104, 105], "finish_reason": "completed"}
+    assert out == {"text": "hi", "token_ids": [104, 105], "logprobs": None, "finish_reason": "completed"}
     rid, pids, sp = mgr.calls[0]
     assert rid == "r1" and pids == [1, 2, 3]
     assert sp["max_tokens"] == 17 and sp["temperature"] == 0.7 and sp["top_p"] == 0.9
@@ -36,3 +38,13 @@ async def test_shim_sticky_request_id_across_turns():
     await shim.complete([1], max_tokens=1)
     await shim.complete([1, 2], max_tokens=1)
     assert [c[0] for c in mgr.calls] == ["sticky", "sticky"]  # same server -> prefix cache hits
+
+
+async def test_shim_tracks_global_steps_range():
+    mgr = FakeServerManager()
+    shim = VerlPolicyShim(mgr, FakeTok(), request_id="r")
+    mgr.gs = 3
+    await shim.complete([1], max_tokens=1)
+    mgr.gs = 5
+    await shim.complete([1, 2], max_tokens=1)
+    assert shim.min_global_steps == 3 and shim.max_global_steps == 5

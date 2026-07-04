@@ -27,7 +27,8 @@ class FakePolicy:
 
     async def complete(self, prompt_token_ids, max_tokens=2048, **kw):
         text = self.scripted.pop(0)
-        return {"text": text, "token_ids": [ord(c) for c in text], "finish_reason": "stop"}
+        ids = [ord(c) for c in text]
+        return {"text": text, "token_ids": ids, "logprobs": [-0.5] * len(ids), "finish_reason": "stop"}
 
 
 class FakeSandbox:
@@ -133,3 +134,40 @@ async def test_turn_spans_cover_masked_tokens(loop):
         in_span.update(range(s, e))
     masked = {i for i, m in enumerate(traj.loss_mask) if m}
     assert in_span == masked
+
+
+async def test_no_duplicate_assistant_close():
+    """If the model generated its own end-of-turn token, the obs delta must not re-add it."""
+    tok = FakeTokenizer()
+    tok.eos_token_id = ord("!")  # pretend '!' is the eos token
+    loop2 = AgentLoop(tokenizer=tok, max_turns=3, max_context=100_000)
+    # gen ends with eos -> close ("</assistant>") must be dropped from the obs delta
+    with_close = loop2._obs_ids("obs", drop_assistant_close=False)
+    without = loop2._obs_ids("obs", drop_assistant_close=True)
+    close = [ord(c) for c in "</assistant>"]
+    assert with_close[: len(close)] == close
+    assert without == with_close[len(close):]
+
+
+async def test_submit_inside_fence_does_not_end_episode(loop):
+    """'submit' on its own line INSIDE a bash fence must not terminate the episode."""
+    policy = FakePolicy(["```bash\necho hi\nsubmit\n```", "submit"])
+    traj = await loop.run(TASK, policy, FakeSandbox())
+    assert traj.info["turns"] == 2          # fence-submit ignored, real submit on turn 2
+    assert traj.info["submitted"] is True
+
+
+async def test_patch_captured_when_workdir_set(loop):
+    task = Task(task_id="t2", prompt="fix", env_spec={"test_cmd": "runtests", "workdir": "/repo"})
+    policy = FakePolicy(["```bash\ncat f.py\n```", "submit"])
+    traj = await loop.run(task, policy, FakeSandbox())
+    assert traj.info["patch"] == "file contents here"  # FakeSandbox generic exec output
+
+
+async def test_logprobs_aligned_with_tokens(loop):
+    policy = FakePolicy(["```bash\ncat f.py\n```", "submit"])
+    traj = await loop.run(TASK, policy, FakeSandbox())
+    assert traj.logprobs is not None and len(traj.logprobs) == len(traj.input_ids)
+    # mask==0 positions carry 0.0 filler
+    assert all(lp == 0.0 for lp, m in zip(traj.logprobs, traj.loss_mask) if m == 0)
+

@@ -219,8 +219,11 @@ __marimo__/
 .venv/
 
 
-predictions.jsonl
+predictions*
 tasks*.jsonl
 *.log
 logs/
 evaluation_results/
+checkpoints/
+outputs/
+*.parquet

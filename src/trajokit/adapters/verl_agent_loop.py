@@ -23,6 +23,7 @@ import time
 import uuid
 from typing import Any
 
+from ..cache import cache_from_env
 from ..loop import AgentLoop
 from ..sandbox import LocalDockerSandbox
 from ..types import Task
@@ -43,6 +44,8 @@ class VerlPolicyShim:
         self.tok = tokenizer
         self.request_id = request_id  # sticky session -> same server across turns (prefix cache)
         self.base = dict(base_sampling_params or {})
+        self.min_global_steps: int | None = None  # weight-version range across turns
+        self.max_global_steps: int | None = None
 
     async def complete(self, prompt_token_ids: list[int], max_tokens: int = 2048,
                        temperature: float | None = None, stop: list[str] | None = None) -> dict:
@@ -55,24 +58,40 @@ class VerlPolicyShim:
         out = await self.server_manager.generate(
             request_id=self.request_id, prompt_ids=prompt_token_ids, sampling_params=sp
         )
+        ef = getattr(out, "extra_fields", None) or {}
+        mn, mx = ef.get("min_global_steps"), ef.get("max_global_steps")
+        if mn is not None:
+            self.min_global_steps = mn if self.min_global_steps is None else min(self.min_global_steps, mn)
+        if mx is not None:
+            self.max_global_steps = mx if self.max_global_steps is None else max(self.max_global_steps, mx)
         return {
             "text": self.tok.decode(out.token_ids),
             "token_ids": list(out.token_ids),
+            "logprobs": list(out.log_probs) if getattr(out, "log_probs", None) else None,
             "finish_reason": out.stop_reason,
         }
 
 
-def _make_agent_loop_cls():
-    """Build the verl subclass lazily (verl import only when actually used)."""
-    from verl.experimental.agent_loop.agent_loop import (  # noqa: PLC0415
+try:  # verl is optional: VerlPolicyShim stays importable/testable without it
+    from verl.experimental.agent_loop.agent_loop import (
         AgentLoopBase,
         AgentLoopMetrics,
         AgentLoopOutput,
         register,
     )
 
+    _HAS_VERL = True
+except ImportError:  # pragma: no cover
+    _HAS_VERL = False
+
+
+if _HAS_VERL:
+
     @register("trajokit")
     class TrajokitAgentLoop(AgentLoopBase):
+        # NOTE: must be a top-level class — hydra instantiates by qualname, and
+        # classes defined inside functions get '<locals>' qualnames it cannot import.
+
         async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
             t0 = time.time()
             env_spec = kwargs["env_spec"]
@@ -81,37 +100,39 @@ def _make_agent_loop_cls():
                 prompt=kwargs["prompt"] if isinstance(kwargs["prompt"], str) else kwargs["prompt"][-1]["content"],
                 env_spec=json.loads(env_spec) if isinstance(env_spec, str) else env_spec,
             )
-            tk = self.rollout_config.get("trajokit", {}) or {}
             loop = AgentLoop(
                 tokenizer=self.tokenizer,
-                max_turns=int(tk.get("max_turns", 30)),
-                max_context=int(tk.get("max_context", self.rollout_config.get("max_model_len", 32768))),
-                max_obs_chars=int(tk.get("max_obs_chars", 8000)),
+                max_turns=int(os.environ.get("TRAJOKIT_MAX_TURNS", "30")),
+                max_context=int(os.environ.get("TRAJOKIT_MAX_CONTEXT", "32768")),
+                max_obs_chars=int(os.environ.get("TRAJOKIT_MAX_OBS_CHARS", "8000")),
                 gen_kwargs={"temperature": sampling_params.get("temperature", 1.0)},
                 chat_template_kwargs=self.apply_chat_template_kwargs,
             )
             policy = VerlPolicyShim(self.server_manager, self.tokenizer,
                                     request_id=uuid.uuid4().hex,
                                     base_sampling_params=sampling_params)
-            async with _SANDBOX_SEM:
-                traj = await loop.run(task, policy, LocalDockerSandbox())
+            cache = cache_from_env()
+            traj = cache.load_one(task.task_id) if cache else None
+            if traj is None:
+                async with _SANDBOX_SEM:
+                    traj = await loop.run(task, policy, LocalDockerSandbox())
+                if cache:
+                    cache.save(traj)
 
             prompt_ids, response_ids, response_mask = split_prompt_response(traj)
+            response_logprobs = traj.logprobs[len(prompt_ids):] if traj.logprobs else None
             return AgentLoopOutput(
                 prompt_ids=prompt_ids,
                 response_ids=response_ids,
                 response_mask=response_mask,
+                response_logprobs=response_logprobs,
                 reward_score=traj.reward,
                 num_turns=traj.info["turns"],
                 metrics=AgentLoopMetrics(generate_sequences=time.time() - t0),
                 extra_fields={"task_id": traj.task_id, "patch": traj.info.get("patch", ""),
-                              "submitted": traj.info.get("submitted", False)},
+                              "submitted": traj.info.get("submitted", False),
+                              # weight-version tags verl's staleness metrics expect;
+                              # -1 = unknown (e.g. cache replay)
+                              "min_global_steps": -1 if policy.min_global_steps is None else policy.min_global_steps,
+                              "max_global_steps": -1 if policy.max_global_steps is None else policy.max_global_steps},
             )
-
-    return TrajokitAgentLoop
-
-
-try:  # register on import when verl is present; harmless no-op otherwise
-    TrajokitAgentLoop = _make_agent_loop_cls()
-except ImportError:  # pragma: no cover
-    TrajokitAgentLoop = None

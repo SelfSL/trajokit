@@ -32,12 +32,15 @@ class Trajectory:
     reward: float
     info: dict[str, Any] = field(default_factory=dict)
     turn_spans: list[tuple[int, int]] = field(default_factory=list)  # [start, end) per assistant turn
+    logprobs: list[float] | None = None  # per-token rollout logprobs; 0.0 for prompt/tool tokens
 
     def __post_init__(self) -> None:
         if len(self.input_ids) != len(self.loss_mask):
             raise ValueError(
                 f"input_ids ({len(self.input_ids)}) and loss_mask ({len(self.loss_mask)}) length mismatch"
             )
+        if self.logprobs is not None and len(self.logprobs) != len(self.input_ids):
+            raise ValueError("logprobs length must match input_ids")
 
 
 def load_tasks(jsonl_path: str | Path) -> list[Task]:
@@ -48,3 +51,4 @@ def load_tasks(jsonl_path: str | Path) -> list[Task]:
                 d = json.loads(line)
                 tasks.append(Task(task_id=d["task_id"], prompt=d["prompt"], env_spec=d["env_spec"]))
     return tasks
+

@@ -1,0 +1,2 @@
+- name: trajokit
+  _target_: trajokit.adapters.verl_agent_loop.TrajokitAgentLoop

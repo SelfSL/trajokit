@@ -11,8 +11,8 @@ Design invariants:
 from __future__ import annotations
 
 import re
-import time
 import shlex
+import time
 from typing import Any
 
 from .policy import PolicyClient
@@ -20,15 +20,15 @@ from .sandbox import Sandbox
 from .types import Task, Trajectory
 from .verifiers import TestCmdVerifier, Verifier
 
-FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 BASH_RE = re.compile(r"```bash\s*\n(.*?)```", re.DOTALL)
+FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 SUBMIT_RE = re.compile(r"^\s*submit\s*$", re.MULTILINE | re.IGNORECASE)
 
 SYSTEM = (
     "You are an autonomous software engineer working in a sandboxed repo.\n"
     "Each turn: think briefly, then EITHER emit exactly one ```bash ...``` block "
-    "to run a command, OR write `submit` on its own line when the task is complete."
-    "Commands must be non-interactive (no nano/vim); edit files via sed or cat/python heredocs.\n"
+    "to run a command, OR write `submit` on its own line when the task is complete.\n"
+    "Commands must be non-interactive (no nano/vim); edit files via sed or cat/python heredocs."
 )
 
 
@@ -55,40 +55,36 @@ class AgentLoop:
 
     def _prefix_ids(self, task: Task) -> list[int]:
         msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": task.prompt}]
-        out = self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=True)
+        out = self.tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=True, **self.ct_kwargs)
         ids = out if isinstance(out, list) else out["input_ids"]  # transformers 5.x: BatchEncoding
         if ids and isinstance(ids[0], list):  # possible batch dim
             ids = ids[0]
         return list(ids)
 
     def _obs_ids(self, obs: str, drop_assistant_close: bool = False) -> list[int]:
-        """Tokenize env output as a template delta — never re-render the full conversation.
+        """Tokenize env output as a delta: full render minus known prefix render.
 
-        drop_assistant_close: True when the model already generated its own
-        end-of-turn token, so we must not add a duplicate close.
+        Uses the tokenizer's own template on a dummy exchange and slices the suffix,
+        so any template is supported without hand-writing fragments. When the model
+        already generated its own end-of-turn token, drop the duplicate close.
         """
-        # render 3 snapshots of a dummy conversation with the tokenizer's own template:
-        # base = "...<|im_start|>assistant\n"                      (before generation)
         base = self.tok.apply_chat_template(
-            [{"role": "user", "content": "x"}], add_generation_prompt=True, tokenize=False
+            [{"role": "user", "content": "x"}], add_generation_prompt=True, tokenize=False, **self.ct_kwargs
         )
-        # mid  = base + "<|im_end|>\n"                             (assistant turn closed)
         mid = self.tok.apply_chat_template(
-            [{"role": "user", "content": "x"}, {"role": "assistant", "content": ""}], tokenize=False
+            [{"role": "user", "content": "x"}, {"role": "assistant", "content": ""}], tokenize=False, **self.ct_kwargs
         )
-        # full = mid + "<|im_start|>user\n{obs}<|im_end|>\n<|im_start|>assistant\n"
         full = self.tok.apply_chat_template(
             [{"role": "user", "content": "x"},
              {"role": "assistant", "content": ""},
              {"role": "user", "content": obs}],
-            add_generation_prompt=True, tokenize=False,
+            add_generation_prompt=True, tokenize=False, **self.ct_kwargs,
         )
-        # what we need to append after the model's turn:
         delta = full[len(base):]
         if drop_assistant_close:
-            close = mid[len(base):]            # the "<|im_end|>\n" fragment
+            close = mid[len(base):]  # e.g. "<|im_end|>\n" — model already generated it
             if close and delta.startswith(close):
-                delta = delta[len(close):]     # model already emitted it — skip duplicate
+                delta = delta[len(close):]
         return self.tok(delta, add_special_tokens=False)["input_ids"]
 
     # ---- main loop ----
@@ -97,6 +93,7 @@ class AgentLoop:
         t0 = time.time()
         ids: list[int] = list(self._prefix_ids(task))
         mask: list[int] = [0] * len(ids)
+        lps: list[float] = [0.0] * len(ids)
         spans: list[tuple[int, int]] = []
         transcript: list[str] = [f"[task]\n{task.prompt}"]
         turns, truncated, submitted = 0, False, False
@@ -118,6 +115,8 @@ class AgentLoop:
                 if gen_ids is None:  # server didn't return ids; tokenize text (drift risk, warn)
                     gen_ids = self.tok(out["text"], add_special_tokens=False)["input_ids"]
                 spans.append((len(ids), len(ids) + len(gen_ids)))
+                gen_lps = out.get("logprobs")
+                lps += list(gen_lps) if gen_lps and len(gen_lps) == len(gen_ids) else [0.0] * len(gen_ids)
                 ids += gen_ids
                 mask += [1] * len(gen_ids)
                 turns += 1
@@ -136,12 +135,11 @@ class AgentLoop:
                     obs = "No ```bash``` block found. Emit one command, or `submit`."
 
                 transcript.append(f"[env]\n{obs}")
-                # did the model end its turn with its own eos (<|im_end|>)?
                 ended_eos = bool(gen_ids) and gen_ids[-1] == getattr(self.tok, "eos_token_id", None)
-                # if so, the obs delta must not re-add the close token
                 obs_ids = self._obs_ids(obs, drop_assistant_close=ended_eos)
                 ids += obs_ids
                 mask += [0] * len(obs_ids)
+                lps += [0.0] * len(obs_ids)
 
             patch = ""
             workdir = task.env_spec.get("workdir")
@@ -166,4 +164,6 @@ class AgentLoop:
                 "patch": patch,
             },
             turn_spans=spans,
+            logprobs=lps,
         )
+
