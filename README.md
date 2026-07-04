@@ -36,6 +36,11 @@ tasks = load_tasks("swebench_verified.jsonl")
 groups = asyncio.run(orch.run_batch(tasks[:8], k=8))  # 8 tasks x 8 rollouts (GRPO groups)
 ```
 
+## Validation
+Controls, benchmarks, and an officially-graded SWE-bench Verified baseline
+(24% pass@1 on the first 100 instances, minimal scaffold): see
+[docs/validation.md](docs/validation.md).
+
 ## Status
 
 v0.0.1 scaffold. Roadmap: SWE-bench Verified loader → verl adapter → recipe with

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import time
+import shlex
 from typing import Any
 
 from .policy import PolicyClient
@@ -142,6 +143,12 @@ class AgentLoop:
                 ids += obs_ids
                 mask += [0] * len(obs_ids)
 
+            patch = ""
+            workdir = task.env_spec.get("workdir")
+            if workdir:  # capture model patch BEFORE verifier mutates the repo
+                res = await sandbox.exec(f"git -C {shlex.quote(workdir)} diff", timeout=60)
+                if res.returncode == 0:
+                    patch = res.stdout
             reward = await self.verifier.score(task, sandbox, "\n\n".join(transcript))
         finally:
             await sandbox.stop()
@@ -156,6 +163,7 @@ class AgentLoop:
                 "truncated": truncated,
                 "submitted": submitted,
                 "wall_s": round(time.time() - t0, 1),
+                "patch": patch,
             },
             turn_spans=spans,
         )

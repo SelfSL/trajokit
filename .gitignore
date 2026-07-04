@@ -217,3 +217,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .venv/
+
+
+predictions.jsonl
+tasks*.jsonl
+*.log
+logs/
+evaluation_results/
