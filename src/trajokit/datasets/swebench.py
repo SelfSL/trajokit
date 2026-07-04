@@ -31,12 +31,15 @@ def _image(instance_id: str) -> str:
 
 
 def _test_cmd(row: dict) -> str:
-    """apply gold test_patch, then run FAIL_TO_PASS with the repo's own test command."""
+    """apply gold test_patch, then run the same test directives the official harness uses."""
     from swebench.harness.constants import MAP_REPO_VERSION_TO_SPECS
+    try:
+        from swebench.harness.utils import get_test_directives
+    except ImportError:
+        from swebench.harness.test_spec.python import get_test_directives
 
     spec = MAP_REPO_VERSION_TO_SPECS[row["repo"]][row["version"]]
-    f2p = json.loads(row["FAIL_TO_PASS"]) if isinstance(row["FAIL_TO_PASS"], str) else row["FAIL_TO_PASS"]
-    tests = " ".join(shlex.quote(t) for t in f2p)
+    tests = " ".join(shlex.quote(t) for t in get_test_directives(row))
     # heredoc terminator must be alone on its line; chain via set -e, not '&&'
     return (
         "set -e\n"
@@ -46,7 +49,6 @@ def _test_cmd(row: dict) -> str:
         "TRAJOKIT_EOF\n"
         f"{spec['test_cmd']} {tests}\n"
     )
-
 
 def load_swebench_verified(limit: int | None = None, split: str = "test") -> list[Task]:
     from datasets import load_dataset  # optional dep: trajokit[swebench]
