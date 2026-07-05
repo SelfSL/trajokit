@@ -51,3 +51,12 @@ v2 failed: instead of inducing edits, the framing induced early bail-outs (2-3-t
 empty episodes) and "analysis complete" loops where the model documented the fix,
 never applied it, and repeated `exit 0`. Full v2 wording preserved in this file's
 git history rationale; report: docs/results/…trajokit-100-v2.json.
+
+
+## Official SWE-bench Verified — full 500
+| config | pass@1 | empty patches |
+|---|---|---|
+| bash-minimal-v1, greedy, 50 turns, 32k ctx, Qwen3-Coder-30B-A3B | **99/500 (19.8%)** | 190 (38%) |
+
+Empty-patch rate rises from 24% (first-100 slice) to 38% on the full set — the
+minimal scaffold generalizes worse to unseen repos; primary improvement lever.
