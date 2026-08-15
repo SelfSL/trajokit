@@ -20,11 +20,15 @@ retokenizing conversations, and reward poisoning from scoring infra failures as 
 trajokit is the **rollout layer alone, with correctness as the product**:
 
 - **Token-id round-trip.** Prompts go to the engine as token ids, completions come
-  back as token ids, the buffer is append-only — no chat-template re-rendering,
+  back as token ids, the buffer is append-only, no chat-template re-rendering,
   ever. Verified in training: rollout↔trainer logprob Pearson 0.997.
+- **Template-delta correctness.** Turn seams are built by single-render sentinel
+  splicing, surviving position-polymorphic chat templates (e.g. Qwen3.x thinking
+  blocks). Fixing one silent seam bug moved Qwen3.6-27B from 33% → 57% pass@1 on
+  SWE-bench Verified-100, larger than any prompt change we tested.
 - **Trainer-agnostic contract.** Output is just `{input_ids, loss_mask, reward,
   logprobs}` over an HTTP or token-server policy. The same episode code produced
-  our standalone SWE-bench baseline and a 15-step GSPO run inside verl.
+  our standalone SWE-bench baselines and a 15-step GSPO run inside verl.
 - **Reward hygiene.** Env failure drops the rollout (never a fake 0), verifiers are
   pluggable (unit tests or LLM judge), prompts are versioned with graded numbers.
 
@@ -35,7 +39,7 @@ debugging, patch export for official-harness grading, SWE-bench Verified loader.
 
 Frameworks like verl, RL-Factory, and AgentRL own the **trainer**: distributed
 optimization, weight sync, rollout scheduling, and their own built-in agentic
-loops. trajokit deliberately does not compete there — it owns the **trajectory
+loops. trajokit deliberately does not compete there, it owns the **trajectory
 contract**: the agent loop, tokenization/masking, sandbox execution, and reward
 verification, emitting trainer-ready tensors. Use it *with* them: our shipped verl
 integration is ~100 lines mapping `Trajectory → AgentLoopOutput` over verl's token
@@ -62,15 +66,18 @@ groups = asyncio.run(orch.run_batch(tasks[:8], k=8))  # GRPO groups
 
 ## Validation
 
-Controls (positive/negative/verifier-agreement), an officially graded SWE-bench
-Verified baseline (24% pass@1, first 100 instances, minimal bash scaffold), and a
-15-step GSPO training run through verl: see [docs/validation.md](docs/validation.md).
+Controls (positive/negative/verifier-agreement), officially graded SWE-bench
+Verified baselines (Qwen3.6-27B: **57% pass@1** on the first-100 slice;
+Qwen3-Coder-30B-A3B: 19.8% on the full 500, minimal bash scaffold, greedy), a
+15-step GSPO training run through verl, and a case study where fixing silent
+template-seam corruption moved a model 33% → 57%: see
+[docs/validation.md](docs/validation.md).
 Install sharp edges (Blackwell/CUDA 13): [docs/install.md](docs/install.md).
 
 ## Roadmap
 
-Official 500-instance baseline → P5en (64×H200) scaling → prompt/format presets
-(`ActionFormat`) → τ²-bench-style customer-service env with judge rewards →
-slime/miles adapters.
+Full-500 Qwen3.6 baseline → prompt/format presets (`ActionFormat`, incl.
+thinking-mode configs) → multi-GPU scaling recipes → τ²-bench-style
+customer-service env with judge rewards → slime/miles adapters.
 
 Apache-2.0
