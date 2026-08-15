@@ -16,6 +16,11 @@ def parse_args():
     ap.add_argument("--concurrency", type=int, default=16)
     ap.add_argument("--max-turns", type=int, default=50)
     ap.add_argument("--max-context", type=int, default=32768)
+    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--top-p", type=float, default=None)
+    ap.add_argument("--presence-penalty", type=float, default=None)
+    ap.add_argument("--no-thinking", action="store_true",
+                    help="disable thinking mode via chat template (Qwen3.x family)")
     ap.add_argument("--out", default="predictions.jsonl")
     return ap.parse_args()
 
@@ -23,8 +28,14 @@ def parse_args():
 async def main(args):
     tasks = load_tasks(args.tasks)[: args.n_tasks]
     tok = AutoTokenizer.from_pretrained(args.tokenizer or args.model)
+    gen_kwargs = {"temperature": args.temperature}
+    if args.top_p is not None:
+        gen_kwargs["top_p"] = args.top_p
+    if args.presence_penalty is not None:
+        gen_kwargs["presence_penalty"] = args.presence_penalty
     loop = AgentLoop(tokenizer=tok, max_turns=args.max_turns, max_context=args.max_context,
-                     gen_kwargs={"temperature": 0.0})  # greedy pass@1
+                     gen_kwargs=gen_kwargs,
+                     chat_template_kwargs={"enable_thinking": False} if args.no_thinking else None)
     policy = PolicyClient("http://localhost:8000", model=args.model)
     orch = Orchestrator(loop, policy, sandbox_factory=LocalDockerSandbox,
                         max_concurrency=args.concurrency)
@@ -52,7 +63,7 @@ async def main(args):
     print(f"\nwrote {args.out}; grade with:\n"
           f"  uv run python -m swebench.harness.run_evaluation "
           f"--dataset_name princeton-nlp/SWE-bench_Verified "
-          f"--predictions_path {args.out} --max_workers 8 --run_id trajokit-100")
+          f"--predictions_path {args.out} --max_workers 12 --run_id <RUN_ID>")
 
 
 if __name__ == "__main__":

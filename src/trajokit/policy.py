@@ -22,11 +22,12 @@ class PolicyClient:
         max_tokens: int = 2048,
         temperature: float = 1.0,
         stop: list[str] | None = None,
+        **sampling: Any,
     ) -> dict[str, Any]:
-        """Send token ids, get text + token ids back.
+        """Send token ids, get text + token ids (+ logprobs) back.
 
-        vLLM accepts token-id prompts and can return token ids
-        (`return_tokens_as_token_ids`), which removes retokenization drift entirely.
+        Extra keyword args (top_p, presence_penalty, top_k, ...) are forwarded to the
+        server verbatim; None values are dropped.
         """
         payload = {
             "model": self.model,
@@ -37,6 +38,7 @@ class PolicyClient:
             "logprobs": 0,
             "return_tokens_as_token_ids": True,
         }
+        payload.update({k: v for k, v in sampling.items() if v is not None})
         r = await self._client.post(f"{self.base_url}/v1/completions", json=payload)
         r.raise_for_status()
         choice = r.json()["choices"][0]
@@ -54,4 +56,3 @@ class PolicyClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
-

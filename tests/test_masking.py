@@ -20,6 +20,9 @@ class FakeTokenizer:
     def __call__(self, text, add_special_tokens=False):
         return {"input_ids": [ord(c) for c in text]}
 
+    def decode(self, ids):
+        return "".join(chr(i) for i in ids)
+
 
 class FakePolicy:
     def __init__(self, scripted: list[str]):
@@ -137,16 +140,69 @@ async def test_turn_spans_cover_masked_tokens(loop):
 
 
 async def test_no_duplicate_assistant_close():
-    """If the model generated its own end-of-turn token, the obs delta must not re-add it."""
+    """Close fragment is present once, and eos-stripped when the model emitted it."""
     tok = FakeTokenizer()
-    tok.eos_token_id = ord("!")  # pretend '!' is the eos token
+    tok.eos_token_id = ord("<")  # decode -> "<", the first char of "</assistant>"
     loop2 = AgentLoop(tokenizer=tok, max_turns=3, max_context=100_000)
-    # gen ends with eos -> close ("</assistant>") must be dropped from the obs delta
-    with_close = loop2._obs_ids("obs", drop_assistant_close=False)
-    without = loop2._obs_ids("obs", drop_assistant_close=True)
-    close = [ord(c) for c in "</assistant>"]
-    assert with_close[: len(close)] == close
-    assert without == with_close[len(close):]
+    with_close = tok.decode(loop2._obs_ids("obs", drop_assistant_close=False))
+    without = tok.decode(loop2._obs_ids("obs", drop_assistant_close=True))
+    assert with_close == "</assistant><user>obs</user><assistant>"
+    assert without == with_close[1:]  # leading eos char stripped
+
+
+class FakeThinkTokenizer(FakeTokenizer):
+    """Mimics Qwen3.x thinking-disabled: generation prompt carries a suffix."""
+
+    def apply_chat_template(self, msgs, add_generation_prompt=False, tokenize=False, **kw):
+        s = "".join(f"<{m['role']}>{m['content']}</{m['role']}>" for m in msgs)
+        if add_generation_prompt:
+            s += "<assistant><T></T>"  # think suffix AFTER the assistant open
+        return [ord(c) for c in s] if tokenize else s
+
+
+async def test_obs_delta_survives_generation_prompt_suffix():
+    """Regression: len()-based slicing corrupted seams when base isn't a prefix of full."""
+    tok = FakeThinkTokenizer()
+    loop2 = AgentLoop(tokenizer=tok, max_turns=3, max_context=100_000)
+    delta = tok.decode(loop2._obs_ids("obs"))
+    assert delta == "</assistant><user>obs</user><assistant><T></T>"
+
+
+class FakePolymorphicTokenizer(FakeTokenizer):
+    """Mimics Qwen3.6: FINAL assistant turn wrapped in think tags, history turns stripped."""
+
+    def apply_chat_template(self, msgs, add_generation_prompt=False, tokenize=False, **kw):
+        parts = []
+        for i, m in enumerate(msgs):
+            c = m["content"]
+            if m["role"] == "assistant" and i == len(msgs) - 1 and not add_generation_prompt:
+                c = f"<T>{c}</T>"  # final-position rendering differs from history
+            parts.append(f"<{m['role']}>{c}</{m['role']}>")
+        s = "".join(parts)
+        if add_generation_prompt:
+            s += "<assistant><T></T>"
+        return [ord(c) for c in s] if tokenize else s
+
+
+async def test_obs_delta_survives_position_polymorphic_template():
+    """Regression: render-diff approaches break when history turns render differently."""
+    tok = FakePolymorphicTokenizer()
+    loop2 = AgentLoop(tokenizer=tok, max_turns=3, max_context=100_000)
+    delta = tok.decode(loop2._obs_ids("obs"))
+    assert delta == "</assistant><user>obs</user><assistant><T></T>"
+
+
+async def test_unterminated_bash_fence_is_executed(loop):
+    """Models often end the turn (eos) without closing the fence - accept it."""
+    policy = FakePolicy(["```bash\ncat f.py", "submit"])
+    traj = await loop.run(TASK, policy, FakeSandbox())
+    assert traj.info["turns"] == 2 and traj.info["submitted"] is True
+
+
+async def test_empty_bash_fence_gets_nudge(loop):
+    policy = FakePolicy(["```bash\n", "```bash\ncat f.py\n```", "submit"])
+    traj = await loop.run(TASK, policy, FakeSandbox())
+    assert traj.info["turns"] == 3  # empty fence consumed a turn with a nudge, then real work
 
 
 async def test_submit_inside_fence_does_not_end_episode(loop):
@@ -170,4 +226,3 @@ async def test_logprobs_aligned_with_tokens(loop):
     assert traj.logprobs is not None and len(traj.logprobs) == len(traj.input_ids)
     # mask==0 positions carry 0.0 filler
     assert all(lp == 0.0 for lp, m in zip(traj.logprobs, traj.loss_mask) if m == 0)
-

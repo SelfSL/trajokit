@@ -20,8 +20,8 @@ from .sandbox import Sandbox
 from .types import Task, Trajectory
 from .verifiers import TestCmdVerifier, Verifier
 
-BASH_RE = re.compile(r"```bash\s*\n(.*?)```", re.DOTALL)
-FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+BASH_RE = re.compile(r"```bash\s*\n(.*?)(?:\n?```|\Z)", re.DOTALL)
+FENCE_RE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 SUBMIT_RE = re.compile(r"^\s*submit\s*$", re.MULTILINE | re.IGNORECASE)
 
 SYSTEM = (
@@ -61,30 +61,40 @@ class AgentLoop:
             ids = ids[0]
         return list(ids)
 
-    def _obs_ids(self, obs: str, drop_assistant_close: bool = False) -> list[int]:
-        """Tokenize env output as a delta: full render minus known prefix render.
+    _TURN_SENTINEL = "@@TRAJOKIT_TURN@@"
+    _OBS_SENTINEL = "@@TRAJOKIT_OBS@@"
 
-        Uses the tokenizer's own template on a dummy exchange and slices the suffix,
-        so any template is supported without hand-writing fragments. When the model
-        already generated its own end-of-turn token, drop the duplicate close.
+    def _obs_frag(self) -> str:
+        """Template fragment between an assistant turn and the next generation start.
+
+        Built from ONE render of a dummy conversation containing unique sentinels,
+        sliced at literal sentinel positions. This survives template polymorphism
+        (e.g. Qwen3.x renders <think> blocks in the FINAL assistant turn but strips
+        them from history turns), which breaks any approach that diffs two renders.
         """
-        base = self.tok.apply_chat_template(
-            [{"role": "user", "content": "x"}], add_generation_prompt=True, tokenize=False, **self.ct_kwargs
-        )
-        mid = self.tok.apply_chat_template(
-            [{"role": "user", "content": "x"}, {"role": "assistant", "content": ""}], tokenize=False, **self.ct_kwargs
-        )
-        full = self.tok.apply_chat_template(
-            [{"role": "user", "content": "x"},
-             {"role": "assistant", "content": ""},
-             {"role": "user", "content": obs}],
-            add_generation_prompt=True, tokenize=False, **self.ct_kwargs,
-        )
-        delta = full[len(base):]
+        if getattr(self, "_obs_frag_cache", None) is None:
+            c = self.tok.apply_chat_template(
+                [{"role": "user", "content": "x"},
+                 {"role": "assistant", "content": self._TURN_SENTINEL},
+                 {"role": "user", "content": self._OBS_SENTINEL}],
+                add_generation_prompt=True, tokenize=False, **self.ct_kwargs,
+            )
+            i = c.rindex(self._TURN_SENTINEL) + len(self._TURN_SENTINEL)
+            self._obs_frag_cache = c[i:]  # assistant close + user turn(OBS) + gen prompt
+        return self._obs_frag_cache
+
+    def _obs_ids(self, obs: str, drop_assistant_close: bool = False) -> list[int]:
+        """Tokenize env output as a template delta - never re-render the conversation."""
+        frag = self._obs_frag()
+        j = frag.index(self._OBS_SENTINEL)
+        delta = frag[:j] + obs + frag[j + len(self._OBS_SENTINEL):]
         if drop_assistant_close:
-            close = mid[len(base):]  # e.g. "<|im_end|>\n" — model already generated it
-            if close and delta.startswith(close):
-                delta = delta[len(close):]
+            eos_id = getattr(self.tok, "eos_token_id", None)
+            eos_text = ""
+            if eos_id is not None and hasattr(self.tok, "decode"):
+                eos_text = self.tok.decode([eos_id])
+            if eos_text and delta.startswith(eos_text):
+                delta = delta[len(eos_text):]  # model already emitted its own eos
         return self.tok(delta, add_special_tokens=False)["input_ids"]
 
     # ---- main loop ----
@@ -127,10 +137,15 @@ class AgentLoop:
                     submitted = True
                     break
                 m = BASH_RE.search(text)
+                if m and not m.group(1).strip():
+                    m = None  # empty fence: treat as no block -> nudge below
                 if m:
+                    n_blocks = len(BASH_RE.findall(text))
                     res = await sandbox.exec(m.group(1).strip())
                     obs = (res.stdout + res.stderr)[-self.max_obs_chars:]
                     obs = f"(exit={res.returncode})\n{obs}" if not res.timed_out else "(TIMEOUT)"
+                    if n_blocks > 1:
+                        obs += f"\n(note: only the first of {n_blocks} bash blocks was executed)"
                 else:
                     obs = "No ```bash``` block found. Emit one command, or `submit`."
 
@@ -166,4 +181,3 @@ class AgentLoop:
             turn_spans=spans,
             logprobs=lps,
         )
-
