@@ -3,6 +3,12 @@
 Backend #1 is the docker CLI via asyncio subprocess: zero deps, good enough for
 hundreds of concurrent containers on one box. Remote pools implement the same
 Protocol later without touching loop code.
+
+Network default is "none" (SWE-bench style isolation). Benchmarks whose grading
+or environments legitimately need egress (e.g. cline-bench: uv pip install in the
+verifier, git fetch in the oracle) set env_spec["network"]="bridge" per task.
+Egress for policy-generated code is a real risk: keep it off unless the benchmark
+requires it.
 """
 from __future__ import annotations
 
@@ -20,7 +26,8 @@ class Sandbox(Protocol):
 
 
 class LocalDockerSandbox:
-    """One container per rollout. Locked down: no network, IMDS unreachable, capped cpu/mem."""
+    """One container per rollout. Locked down: no-new-privileges, capped cpu/mem,
+    network per env_spec (default none)."""
 
     def __init__(self, cpus: float = 2.0, mem: str = "8g", network: str = "none"):
         self.cpus, self.mem, self.network = cpus, mem, network
@@ -29,10 +36,11 @@ class LocalDockerSandbox:
     async def start(self, env_spec: dict[str, Any]) -> None:
         self.name = f"trajokit-{uuid.uuid4().hex[:12]}"
         self.workdir = env_spec.get("workdir", "/")
+        network = env_spec.get("network", self.network)
         cmd = [
             "docker", "run", "-d", "--name", self.name,
             f"--cpus={self.cpus}", f"--memory={self.mem}",
-            f"--network={self.network}",
+            f"--network={network}",
             "--security-opt", "no-new-privileges",
             env_spec["image"], "sleep", "infinity",
         ]
