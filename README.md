@@ -24,7 +24,7 @@ trajokit is the **rollout layer alone, with correctness as the product**:
   ever. Verified in training: rollout↔trainer logprob Pearson 0.997.
 - **Template-delta correctness.** Turn seams are built by single-render sentinel
   splicing, surviving position-polymorphic chat templates (e.g. Qwen3.x thinking
-  blocks). Fixing one silent seam bug moved Qwen3.6-27B from 33% → 57% pass@1 on
+  blocks). Fixing one silent seam bug moved Qwen3.6-27B from 33% to 57% pass@1 on
   SWE-bench Verified-100, larger than any prompt change we tested.
 - **Trainer-agnostic contract.** Output is just `{input_ids, loss_mask, reward,
   logprobs}` over an HTTP or token-server policy. The same episode code produced
@@ -67,16 +67,16 @@ groups = asyncio.run(orch.run_batch(tasks[:8], k=8))  # GRPO groups
 ## Validation
 
 Controls (positive/negative/verifier-agreement), officially graded SWE-bench
-Verified baselines (Qwen3.6-27B: **57% pass@1** on the first-100 slice;
-Qwen3-Coder-30B-A3B: 19.8% on the full 500, minimal bash scaffold, greedy), a
-15-step GSPO training run through verl, and a case study where fixing silent
-template-seam corruption moved a model 33% → 57%: see
+Verified baselines (Qwen3.6-27B: **62.0% pass@1 on the full 500** with a minimal
+bash scaffold, greedy, non-thinking; Qwen3-Coder-30B-A3B: 19.8%), a 15-step GSPO
+training run through verl, and a case study where fixing silent template-seam
+corruption moved a model 33% to 57%: see
 [docs/validation.md](docs/validation.md).
 Install sharp edges (Blackwell/CUDA 13): [docs/install.md](docs/install.md).
 
 ## Roadmap
 
-Full-500 Qwen3.6 baseline → prompt/format presets (`ActionFormat`, incl.
+Prompt/format presets (`ActionFormat`, incl.
 thinking-mode configs) → multi-GPU scaling recipes → τ²-bench-style
 customer-service env with judge rewards → slime/miles adapters.
 

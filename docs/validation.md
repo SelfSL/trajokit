@@ -44,15 +44,21 @@ Open confound: all coder runs scoring 16-17% used the source-built sm_120
 flashinfer; the 24% run predates it. Discriminating rerun (no flashinfer, current
 code) pending.
 
-### Full 500 (Qwen3-Coder-30B-A3B, bash-minimal-v1)
+### Full 500
 
-| metric | value |
-|---|---|
-| pass@1 | **99/500 (19.8%)** |
-| empty patches | 190 (38%) |
+| model | pass@1 | empty patches |
+|---|---|---|
+| Qwen3.6-27B (dense, non-thinking, post seam-fix) | **310/500 (62.0%)** | 50 (10%) |
+| Qwen3-Coder-30B-A3B (MoE, bash-minimal-v1) | 99/500 (19.8%) | 190 (38%) |
 
-Empty-patch rate rises from 24% (first-100 slice) to 38% on the full set, the
-minimal scaffold generalizes worse to unseen repos.
+Context for the 62.0%: on the same model, the community reports 67.8% via
+mini-swe-agent (richer settings), 77.2% via Qwen's official scaffold, and up to
+90% with an engineered agent stack. Our minimal-scaffold greedy non-thinking
+number sits below all of these, exactly where it should: the scaffold ladder is
+consistent, so the number is credible rather than inflated.
+
+Coder empty-patch rate rises from 24% (first-100 slice) to 38% on the full set:
+the minimal scaffold generalizes worse to unseen repos for that model.
 
 ## Case study: template-delta seam corruption (fixed)
 
@@ -67,7 +73,7 @@ Fix: single-render sentinel splicing (`AgentLoop._obs_frag`), one dummy render c
 at literal sentinel positions, no cross-render assumptions, plus acceptance of
 end-of-message-terminated bash fences and a nudge for empty fences.
 
-Result, same model/slice/config: **33% → 57% pass@1, empty patches 50 → 12** -
+Result, same model/slice/config: **33% to 57% pass@1, empty patches 50 → 12** -
 a +24-point swing from token-stream correctness alone, larger than any prompt or
 model change we tested. Regression tests:
 `test_obs_delta_survives_position_polymorphic_template`,
