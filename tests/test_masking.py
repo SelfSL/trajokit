@@ -226,3 +226,11 @@ async def test_logprobs_aligned_with_tokens(loop):
     assert traj.logprobs is not None and len(traj.logprobs) == len(traj.input_ids)
     # mask==0 positions carry 0.0 filler
     assert all(lp == 0.0 for lp, m in zip(traj.logprobs, traj.loss_mask) if m == 0)
+
+
+
+async def test_fence_containing_only_submit_ends_episode(loop):
+    """```bash\nsubmit\n``` is an unambiguous submit, not a command to execute."""
+    policy = FakePolicy(["```bash\ncat f.py\n```", "```bash\nsubmit\n```"])
+    traj = await loop.run(TASK, policy, FakeSandbox())
+    assert traj.info["turns"] == 2 and traj.info["submitted"] is True

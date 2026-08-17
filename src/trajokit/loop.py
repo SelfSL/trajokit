@@ -133,6 +133,11 @@ class AgentLoop:
 
                 text = out["text"]
                 transcript.append(f"[agent]\n{text}")
+                # a fence containing ONLY `submit` unambiguously means submit
+                m_pre = BASH_RE.search(text)
+                if m_pre and m_pre.group(1).strip().lower() == "submit":
+                    submitted = True
+                    break
                 if SUBMIT_RE.search(FENCE_RE.sub("", text)):
                     submitted = True
                     break
