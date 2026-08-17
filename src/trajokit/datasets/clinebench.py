@@ -86,22 +86,42 @@ def _oracle_cmd(solution_dir: Path, workdir: str) -> str:
     )
 
 
-def _build_image(task_dir: Path, tag: str, timeout: float) -> None:
-    subprocess.run(
-        ["docker", "build", "-t", tag, str(task_dir / "environment")],
-        check=True,
-        timeout=timeout,
-        capture_output=True,
+def _image_exists(tag: str) -> bool:
+    return subprocess.run(
+        ["docker", "image", "inspect", tag], capture_output=True
+    ).returncode == 0
+
+
+def _build_image(task_dir: Path, tag: str, timeout: float, retries: int = 1) -> None:
+    """Build with one retry (Dockerfiles fetch from the network; flakes happen).
+
+    Already-built tags are reused, so reruns after a partial failure are cheap.
+    """
+    if _image_exists(tag):
+        return
+    last = None
+    for attempt in range(retries + 1):
+        r = subprocess.run(
+            ["docker", "build", "-t", tag, str(task_dir / "environment")],
+            capture_output=True, timeout=timeout, text=True,
+        )
+        if r.returncode == 0:
+            return
+        last = r
+    raise RuntimeError(
+        f"docker build failed for {task_dir.name} after {retries + 1} attempts; "
+        f"stderr tail:\n{(last.stderr or last.stdout)[-1500:]}"
     )
 
 
 def load_clinebench(clone_dir: str | Path, limit: int | None = None,
-                    build: bool = True) -> list[Task]:
+                    build: bool = True, skip_failed: bool = False) -> list[Task]:
     root = Path(clone_dir) / "tasks"
     if not root.is_dir():
         raise FileNotFoundError(f"no tasks/ under {clone_dir}; clone cline-bench first")
 
     tasks: list[Task] = []
+    failed: list[str] = []
     for task_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         cfg = tomllib.loads((task_dir / "task.toml").read_text())
         dockerfile = (task_dir / "environment" / "Dockerfile").read_text()
@@ -109,8 +129,15 @@ def load_clinebench(clone_dir: str | Path, limit: int | None = None,
         tag = f"trajokit-clinebench:{task_dir.name.split('-')[0]}"
 
         if build:
-            _build_image(task_dir, tag,
-                         float(cfg.get("environment", {}).get("build_timeout_sec", 900)))
+            try:
+                _build_image(task_dir, tag,
+                             float(cfg.get("environment", {}).get("build_timeout_sec", 900)))
+            except Exception as e:
+                if skip_failed:
+                    print(f"SKIP {task_dir.name}: {e}")
+                    failed.append(task_dir.name)
+                    continue
+                raise
 
         env_spec = {
             "image": tag,
@@ -133,6 +160,8 @@ def load_clinebench(clone_dir: str | Path, limit: int | None = None,
         )
         if limit and len(tasks) >= limit:
             break
+    if failed:
+        print(f"{len(failed)} task(s) skipped due to build failures: {failed}")
     return tasks
 
 
@@ -150,7 +179,10 @@ if __name__ == "__main__":
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--skip-build", action="store_true",
                     help="assume images already built (reuse tags)")
+    ap.add_argument("--skip-failed", action="store_true",
+                    help="skip tasks whose image build fails instead of aborting")
     args = ap.parse_args()
-    ts = load_clinebench(args.clone_dir, limit=args.limit, build=not args.skip_build)
+    ts = load_clinebench(args.clone_dir, limit=args.limit, build=not args.skip_build,
+                         skip_failed=args.skip_failed)
     write_jsonl(ts, args.out)
     print(f"wrote {len(ts)} tasks -> {args.out}")
