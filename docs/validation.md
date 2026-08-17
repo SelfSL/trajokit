@@ -83,6 +83,32 @@ model change we tested. Regression tests:
 Lesson encoded: token-stream corruption is silent and dwarfs prompt effects;
 transcript-level auditing is part of the eval loop, not optional.
 
+## cline-bench (first non-SWE-bench domain)
+
+Adapter: `trajokit.datasets.clinebench` maps a local clone of
+github.com/cline/cline-bench (Harbor task format) onto the standard Task shape.
+Per-task images are built locally from each task's Dockerfile; tests are injected
+at verification time only (base64 tarball inside test_cmd), so the agent never
+sees them; grading gates on the upstream reward.txt convention; the sandbox gets
+per-task network (`bridge`) because the upstream verifier and oracle require
+egress by design.
+
+Controls (task 0): negative = 7 genuine test failures on the untouched repo
+(exit 1); positive = oracle solve.sh then 7/7 pass (exit 0).
+
+| model | config | solved |
+|---|---|---|
+| Qwen3.6-27B (non-thinking, greedy, 50 turns) | bash-minimal | **3/11 (27%)** |
+
+Environment coverage: 11/12 upstream tasks build; 1 skipped due to an upstream
+Dockerfile breakage (unpinned torch + torch-scatter sdist with
+--no-build-isolation fails at metadata generation; deterministic, reported
+upstream once their issue tracker opens).
+
+Caveats carried on this benchmark: n=11 (noisy), public-repo provenance
+(contamination risk), locally built environments (dependency drift between
+builds, unlike SWE-bench's frozen images).
+
 ## Prompt versioning
 
 The system prompt is part of the recipe; changes are only adopted with a graded eval.
