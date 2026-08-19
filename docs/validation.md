@@ -98,7 +98,22 @@ Controls (task 0): negative = 7 genuine test failures on the untouched repo
 
 | model | config | solved |
 |---|---|---|
-| Qwen3.6-27B (non-thinking, greedy, 50 turns) | bash-minimal | **3/11 (27%)** |
+| Qwen3.6-27B (non-thinking, greedy, 50 turns, 32k) | bash-minimal | **3/11 (27%)** |
+| Qwen3.8-27B (thinking default, greedy, 50 turns, 32k) | bash-minimal | 2/11 (18%) |
+| Qwen3.8-27B (thinking default, greedy, 50 turns, 128k) | bash-minimal | 2/11 (18%) |
+
+The 128k row is a one-variable experiment (episode budget 32k to 128k, all else
+fixed): identical score, same two solves, 4x wall-clock, and 10/11 episodes ran
+to the 50-turn cap. Context was not the binding constraint for Qwen3.8 here;
+transcript autopsies show the failure mode is behavioral: reconnaissance
+exhaustion (20+ read-only turns) followed by writing the full solution as a
+typescript-fenced plan instead of executable edit commands, so no file is ever
+modified. 32k remains the default config.
+
+Config-hygiene lesson from this experiment: the episode budget and the server's
+max_model_len must be raised together; a stale server silently truncates prompts
+server-side. `scripts/serve_and_bench.sh` now hard-verifies the served config via
+the API before launching.
 
 Environment coverage: 11/12 upstream tasks build; 1 skipped due to an upstream
 Dockerfile breakage (unpinned torch + torch-scatter sdist with
